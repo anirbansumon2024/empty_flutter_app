@@ -1,0 +1,141 @@
+name: Generate Flutter Project
+
+on:
+  # ম্যানুয়ালি চালানো যাবে — Actions ট্যাব থেকে "Run workflow" বাটন দিয়ে
+  workflow_dispatch:
+    inputs:
+      org:
+        description: 'Package org (যেমন: com.yourname)'
+        required: true
+        default: 'com.ottking.app'
+      project_name:
+        description: 'Project name (lowercase, underscore)'
+        required: true
+        default: 'ottking_app'
+      app_title:
+        description: 'App title (ফোনে যা দেখাবে)'
+        required: true
+        default: 'Flutter App'
+
+jobs:
+  create-and-push:
+    name: 🚀 Create Flutter Project & Push to Repo
+    runs-on: ubuntu-latest
+
+    # রিপোতে push করার permission
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
+          cache: true
+
+      # ── ১. Flutter empty project তৈরি করো ──────────────────────────────────
+      - name: 🏗️ Create Flutter project
+        run: |
+          flutter create \
+            --org "${{ github.event.inputs.org }}" \
+            --project-name "${{ github.event.inputs.project_name }}" \
+            /tmp/flutter_project
+
+          echo "✅ Flutter project created"
+          ls /tmp/flutter_project
+
+      # ── ২. App title কাস্টমাইজ করো ─────────────────────────────────────────
+      - name: ✏️ Set app title
+        run: |
+          TITLE="${{ github.event.inputs.app_title }}"
+          MAIN_FILE="/tmp/flutter_project/lib/main.dart"
+
+          # main.dart-এ title বদলাও
+          sed -i "s/title: 'Flutter Demo'/title: '$TITLE'/" "$MAIN_FILE"
+          sed -i "s/home: const MyHomePage(title: 'Flutter Demo Home Page')/home: const MyHomePage(title: '$TITLE')/" "$MAIN_FILE"
+
+          echo "✅ App title set to: $TITLE"
+
+      # ── ৩. Build CI workflow যোগ করো ────────────────────────────────────────
+      - name: ⚙️ Add build CI workflow
+        run: |
+          mkdir -p /tmp/flutter_project/.github/workflows
+
+          cat > /tmp/flutter_project/.github/workflows/build.yml << 'EOF'
+          name: Build APK
+
+          on:
+            push:
+              branches: [ main, master ]
+            pull_request:
+              branches: [ main, master ]
+
+          jobs:
+            build-android:
+              name: 🤖 Build Android APK
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-java@v4
+                  with:
+                    distribution: 'zulu'
+                    java-version: '17'
+                - uses: subosito/flutter-action@v2
+                  with:
+                    flutter-version: '3.22.0'
+                    channel: 'stable'
+                    cache: true
+                - run: flutter pub get
+                - run: flutter build apk --release
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: release-apk
+                    path: build/app/outputs/flutter-apk/app-release.apk
+                    retention-days: 7
+          EOF
+
+          echo "✅ Build CI workflow added"
+
+      # ── ৪. ZIP বানাও ─────────────────────────────────────────────────────────
+      - name: 📦 Create ZIP
+        run: |
+          cd /tmp
+          PROJECT="${{ github.event.inputs.project_name }}"
+          zip -r "${PROJECT}.zip" flutter_project/ \
+            --exclude "*.git*" \
+            --exclude "flutter_project/build/*" \
+            --exclude "flutter_project/.dart_tool/*"
+
+          echo "✅ ZIP created: $(du -sh /tmp/${PROJECT}.zip)"
+
+      # ── ৫. রিপোতে push করো ──────────────────────────────────────────────────
+      - name: 📤 Push ZIP to repository
+        run: |
+          PROJECT="${{ github.event.inputs.project_name }}"
+
+          # ZIP টা repo-র root-এ copy করো
+          cp /tmp/${PROJECT}.zip $GITHUB_WORKSPACE/${PROJECT}.zip
+
+          # Git config
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add ও commit
+          git add ${PROJECT}.zip
+          git commit -m "🚀 Auto-generated Flutter project: ${PROJECT}"
+          git push
+
+          echo "✅ ZIP pushed to repository!"
+          echo "📥 রিপোর root-এ ${PROJECT}.zip নামে পাবেন"
